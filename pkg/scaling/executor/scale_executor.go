@@ -18,7 +18,6 @@ package executor
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,7 +28,6 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	kedav1alpha1 "github.com/kedacore/keda/v2/apis/keda/v1alpha1"
-	kedastatus "github.com/kedacore/keda/v2/pkg/status"
 )
 
 const (
@@ -38,15 +36,25 @@ const (
 	defaultCooldownPeriod        = 5 * 60 // 5 minutes
 )
 
-// ScaleExecutor contains methods RequestJobScale and RequestScale
-type ScaleExecutor interface {
-	RequestJobScale(ctx context.Context, scaledJob *kedav1alpha1.ScaledJob, isActive bool, isError bool, scaleTo int64, maxScale int64)
-	RequestScale(ctx context.Context, scaledObject *kedav1alpha1.ScaledObject, isActive bool, isError bool, options *ScaleExecutorOptions)
+// ScaleResult contains the result of ScaleExecutor actions
+type ScaleResult struct {
+	Conditions       kedav1alpha1.Conditions
+	PauseReplicas    *int32
+	Error            error
+	LastActiveTime   *metav1.Time
+	TriggersActivity map[string]kedav1alpha1.TriggerActivityStatus
 }
 
-// ScaleExecutorOptions contains the optional parameters for the RequestScale method.
+// ScaleExecutor contains methods RequestJobScale and RequestScale
+type ScaleExecutor interface {
+	RequestJobScale(ctx context.Context, scaledJob *kedav1alpha1.ScaledJob, isActive bool, isError bool, scaleTo int64, maxScale int64, options ScaleExecutorOptions) ScaleResult
+	RequestScale(ctx context.Context, scaledObject *kedav1alpha1.ScaledObject, isActive bool, isError bool, options ScaleExecutorOptions) ScaleResult
+}
+
+// ScaleExecutorOptions contains the optional parameters for the RequestScale and RequestJobScale method.
 type ScaleExecutorOptions struct {
-	ActiveTriggers []string
+	ActiveTriggers      []string
+	ForPushScalerMetric string
 }
 
 type scaleExecutor struct {
@@ -68,60 +76,31 @@ func NewScaleExecutor(client runtimeclient.Client, scaleClient scale.ScalesGette
 	}
 }
 
-func (e *scaleExecutor) updateLastActiveTime(ctx context.Context, logger logr.Logger, object interface{}) error {
-	now := metav1.Now()
-	transform := func(runtimeObj runtimeclient.Object, target interface{}) error {
-		now, ok := target.(metav1.Time)
-		if !ok {
-			return fmt.Errorf("transform target is not metav1.Time type %v", target)
-		}
-		switch obj := runtimeObj.(type) {
-		case *kedav1alpha1.ScaledObject:
-			obj.Status.LastActiveTime = &now
-		case *kedav1alpha1.ScaledJob:
-			obj.Status.LastActiveTime = &now
-		default:
-		}
-		return nil
-	}
-	return kedastatus.TransformObject(ctx, e.client, logger, object, now, transform)
-}
+// getTriggersActivity returns a map of trigger names to their activity status based on the provided active triggers and the triggers defined in the scaled object.
+func getTriggersActivity(object kedav1alpha1.ScalableObject, options ScaleExecutorOptions) map[string]kedav1alpha1.TriggerActivityStatus {
+	activeTriggers := options.ActiveTriggers
+	pushScalerMetric := options.ForPushScalerMetric
+	isPushScaler := pushScalerMetric != ""
 
-func (e *scaleExecutor) setCondition(ctx context.Context, logger logr.Logger, object interface{}, status metav1.ConditionStatus, reason string, message string, setCondition func(kedav1alpha1.Conditions, metav1.ConditionStatus, string, string)) error {
-	type transformStruct struct {
-		status  metav1.ConditionStatus
-		reason  string
-		message string
-	}
-	transform := func(runtimeObj runtimeclient.Object, target interface{}) error {
-		transformObj := target.(*transformStruct)
-		switch obj := runtimeObj.(type) {
-		case *kedav1alpha1.ScaledObject:
-			setCondition(obj.Status.Conditions, transformObj.status, transformObj.reason, transformObj.message)
-		case *kedav1alpha1.ScaledJob:
-			setCondition(obj.Status.Conditions, transformObj.status, transformObj.reason, transformObj.message)
-		default:
+	var allTriggerNames []string
+	triggersActivity := make(map[string]kedav1alpha1.TriggerActivityStatus)
+
+	if isPushScaler {
+		// for push scaler, copy existing activity and update the specific metric
+		for k, v := range object.GetStatusTriggersActivity() {
+			triggersActivity[k] = v
 		}
-		return nil
+		allTriggerNames = []string{pushScalerMetric}
+	} else {
+		allTriggerNames = object.GetStatusExternalMetricNames()
 	}
-	target := transformStruct{
-		status:  status,
-		reason:  reason,
-		message: message,
-	}
-	return kedastatus.TransformObject(ctx, e.client, logger, object, &target, transform)
-}
 
-func (e *scaleExecutor) setReadyCondition(ctx context.Context, logger logr.Logger, object interface{}, status metav1.ConditionStatus, reason string, message string) error {
-	active := func(conditions kedav1alpha1.Conditions, status metav1.ConditionStatus, reason string, message string) {
-		conditions.SetReadyCondition(status, reason, message)
+	activeSet := make(map[string]bool, len(activeTriggers))
+	for _, trigger := range activeTriggers {
+		activeSet[trigger] = true
 	}
-	return e.setCondition(ctx, logger, object, status, reason, message, active)
-}
-
-func (e *scaleExecutor) setActiveCondition(ctx context.Context, logger logr.Logger, object interface{}, status metav1.ConditionStatus, reason string, message string) error {
-	active := func(conditions kedav1alpha1.Conditions, status metav1.ConditionStatus, reason string, message string) {
-		conditions.SetActiveCondition(status, reason, message)
+	for _, triggerName := range allTriggerNames {
+		triggersActivity[triggerName] = kedav1alpha1.TriggerActivityStatus{IsActive: activeSet[triggerName]}
 	}
-	return e.setCondition(ctx, logger, object, status, reason, message, active)
+	return triggersActivity
 }

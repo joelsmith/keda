@@ -73,6 +73,12 @@ type HealthStatus struct {
 	Status HealthStatusType `json:"status,omitempty"`
 }
 
+// TriggerActivityStatus represents the activity status of an external trigger
+type TriggerActivityStatus struct {
+	// +optional
+	IsActive bool `json:"isActive"`
+}
+
 // HealthStatusType is an indication of whether the health status is happy or failing
 type HealthStatusType string
 
@@ -91,23 +97,31 @@ const (
 )
 
 // ScaledObjectSpec is the spec for a ScaledObject resource
+// +kubebuilder:validation:XValidation:rule="!has(self.minReplicaCount) || self.minReplicaCount <= (has(self.maxReplicaCount) ? self.maxReplicaCount : 100)",message="minReplicaCount must be less than or equal to maxReplicaCount"
 type ScaledObjectSpec struct {
 	ScaleTargetRef *ScaleTarget `json:"scaleTargetRef"`
 	// +optional
+	// +kubebuilder:validation:Minimum=1
 	PollingInterval *int32 `json:"pollingInterval,omitempty"`
 	// +optional
+	// +kubebuilder:validation:Minimum=0
 	InitialCooldownPeriod *int32 `json:"initialCooldownPeriod,omitempty"`
 	// +optional
+	// +kubebuilder:validation:Minimum=0
 	CooldownPeriod *int32 `json:"cooldownPeriod,omitempty"`
 	// +optional
+	// +kubebuilder:validation:Minimum=0
 	IdleReplicaCount *int32 `json:"idleReplicaCount,omitempty"`
 	// +optional
+	// +kubebuilder:validation:Minimum=0
 	MinReplicaCount *int32 `json:"minReplicaCount,omitempty"`
 	// +optional
+	// +kubebuilder:validation:Minimum=1
 	MaxReplicaCount *int32 `json:"maxReplicaCount,omitempty"`
 	// +optional
 	Advanced *AdvancedConfig `json:"advanced,omitempty"`
 
+	// +kubebuilder:validation:MinItems=1
 	Triggers []ScaleTriggers `json:"triggers"`
 	// +optional
 	Fallback *Fallback `json:"fallback,omitempty"`
@@ -115,8 +129,10 @@ type ScaledObjectSpec struct {
 
 // Fallback is the spec for fallback options
 type Fallback struct {
+	// +kubebuilder:validation:Minimum=0
 	FailureThreshold int32 `json:"failureThreshold"`
-	Replicas         int32 `json:"replicas"`
+	// +kubebuilder:validation:Minimum=0
+	Replicas int32 `json:"replicas"`
 	// +optional
 	// +kubebuilder:default=static
 	// +kubebuilder:validation:Enum=static;currentReplicas;currentReplicasIfHigher;currentReplicasIfLower
@@ -154,6 +170,7 @@ type HorizontalPodAutoscalerConfig struct {
 
 // ScaleTarget holds the reference to the scale target Object
 type ScaleTarget struct {
+	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 	// +optional
 	APIVersion string `json:"apiVersion,omitempty"`
@@ -186,6 +203,8 @@ type ScaledObjectStatus struct {
 	Conditions Conditions `json:"conditions,omitempty"`
 	// +optional
 	Health map[string]HealthStatus `json:"health,omitempty"`
+	// +optional
+	TriggersActivity map[string]TriggerActivityStatus `json:"triggersActivity,omitempty"`
 	// +optional
 	PausedReplicaCount *int32 `json:"pausedReplicaCount,omitempty"`
 	// +optional
@@ -259,6 +278,21 @@ func getBoolAnnotation(so *ScaledObject, annotation string) bool {
 	return boolVal
 }
 
+// GetPausedReplicaCount returns the paused replica count from the annotation, nil if not present.
+func (so *ScaledObject) GetPausedReplicaCount() (*int32, error) {
+	if so.Annotations != nil {
+		if val, ok := so.Annotations[PausedReplicasAnnotation]; ok {
+			conv, err := strconv.ParseInt(val, 10, 32)
+			if err != nil {
+				return nil, err
+			}
+			count := int32(conv)
+			return &count, nil
+		}
+	}
+	return nil, nil
+}
+
 // IsUsingModifiers determines whether scalingModifiers are defined or not
 func (so *ScaledObject) IsUsingModifiers() bool {
 	return so.Spec.Advanced != nil && !reflect.DeepEqual(so.Spec.Advanced.ScalingModifiers, ScalingModifiers{})
@@ -279,6 +313,33 @@ func (so *ScaledObject) GetHPAMaxReplicas() int32 {
 		return *so.Spec.MaxReplicaCount
 	}
 	return defaultHPAMaxReplicas
+}
+
+// GetStatusConditions returns a pointer to the status conditions for in-place modification.
+func (so *ScaledObject) GetStatusConditions() *Conditions { return &so.Status.Conditions }
+
+// SetStatusLastActiveTime sets the LastActiveTime in the status.
+func (so *ScaledObject) SetStatusLastActiveTime(t *metav1.Time) { so.Status.LastActiveTime = t }
+
+// SetStatusPausedReplicaCount sets the PausedReplicaCount in the status.
+func (so *ScaledObject) SetStatusPausedReplicaCount(v *int32) { so.Status.PausedReplicaCount = v }
+
+// GetStatusTriggersActivity returns the map of trigger names to their activity status for the ScaledObject status, initializing it if it is nil.
+func (so *ScaledObject) GetStatusTriggersActivity() map[string]TriggerActivityStatus {
+	if so.Status.TriggersActivity == nil {
+		so.Status.TriggersActivity = make(map[string]TriggerActivityStatus)
+	}
+	return so.Status.TriggersActivity
+}
+
+// SetStatusTriggersActivity sets the triggers activity map in the status.
+func (so *ScaledObject) SetStatusTriggersActivity(m map[string]TriggerActivityStatus) {
+	so.Status.TriggersActivity = m
+}
+
+// GetStatusExternalMetricNames returns the list of external metric names defined in the ScaledObject status
+func (so *ScaledObject) GetStatusExternalMetricNames() []string {
+	return so.Status.ExternalMetricNames
 }
 
 // CheckReplicaCountBoundsAreValid checks that Idle/Min/Max ReplicaCount defined in ScaledObject are correctly specified

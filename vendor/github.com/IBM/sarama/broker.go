@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -223,9 +224,29 @@ func (b *Broker) Open(conf *Config) error {
 		if conf.ApiVersionsRequest {
 			apiVersionsResponse, err := b.sendAndReceiveApiVersions(3)
 			if err != nil {
-				Logger.Printf("Error while sending ApiVersionsRequest to broker %s: %s\n", b.addr, err)
-				// send a v0 request in case remote cluster is < 2.4.0.0
-				apiVersionsResponse, _ = b.sendAndReceiveApiVersions(0)
+				if b.maybeCloseLocked(err) {
+					// Open is async, so we can't return the error here; surface it via Connected().
+					return
+				}
+
+				Logger.Printf("Error while sending ApiVersionsRequest V3 to broker %s: %s\n", b.addr, err)
+				// send a lower version request in case remote cluster is <= 2.4.0.0
+				maxVersion := int16(0)
+				if apiVersionsResponse != nil {
+					for _, k := range apiVersionsResponse.ApiKeys {
+						if k.ApiKey == apiKeyApiVersions {
+							maxVersion = k.MaxVersion
+							break
+						}
+					}
+				}
+				apiVersionsResponse, err = b.sendAndReceiveApiVersions(maxVersion)
+				if err != nil {
+					if b.maybeCloseLocked(err) {
+						return
+					}
+					Logger.Printf("Error while sending ApiVersionsRequest V%d to broker %s: %s\n", maxVersion, b.addr, err)
+				}
 			}
 			if apiVersionsResponse != nil {
 				b.brokerAPIVersions = make(apiVersionMap, len(apiVersionsResponse.ApiKeys))
@@ -328,19 +349,41 @@ func (b *Broker) Close() error {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
+	b.connErr = nil
+	return b.closeLocked()
+}
+
+// maybeCloseLocked closes on transport errors and reports whether a close was performed.
+// NOTE: caller must hold b.lock.
+func (b *Broker) maybeCloseLocked(err error) bool {
+	if !shouldCloseBrokerConn(err) {
+		return false
+	}
+
+	b.connErr = err
+	_ = b.closeLocked()
+	return true
+}
+
+// closeLocked closes the broker connection and resets state.
+// NOTE: caller must hold b.lock.
+func (b *Broker) closeLocked() error {
 	if b.conn == nil {
 		return ErrNotConnected
 	}
 
-	close(b.responses)
-	<-b.done
+	if b.responses != nil {
+		close(b.responses)
+	}
+	if b.done != nil {
+		<-b.done
+	}
 
 	err := b.conn.Close()
 
 	b.conn = nil
-	b.connErr = nil
-	b.done = nil
 	b.responses = nil
+	b.done = nil
 
 	b.metricRegistry.UnregisterAll()
 
@@ -382,6 +425,17 @@ func (b *Broker) GetMetadata(request *MetadataRequest) (*MetadataResponse, error
 
 	err := b.sendAndReceive(request, response)
 	if err != nil {
+		return nil, err
+	}
+
+	return response, nil
+}
+
+func (b *Broker) DescribeCluster(request *DescribeClusterRequest) (*DescribeClusterResponse, error) {
+	response := new(DescribeClusterResponse)
+	response.Version = request.Version
+
+	if err := b.sendAndReceive(request, response); err != nil {
 		return nil, err
 	}
 
@@ -1079,6 +1133,7 @@ func (b *Broker) sendAndReceive(req protocolBody, res protocolBody) error {
 
 	promise, err := b.send(req, res)
 	if err != nil {
+		b.maybeCloseLocked(err)
 		return err
 	}
 
@@ -1088,6 +1143,7 @@ func (b *Broker) sendAndReceive(req protocolBody, res protocolBody) error {
 
 	err = handleResponsePromise(req, res, promise, b.metricRegistry)
 	if err != nil {
+		b.maybeCloseLocked(err)
 		return err
 	}
 	if res != nil {
@@ -1111,12 +1167,7 @@ func (b *Broker) decode(pd packetDecoder, version int16) (err error) {
 		return err
 	}
 
-	var host string
-	if version < 9 {
-		host, err = pd.getString()
-	} else {
-		host, err = pd.getCompactString()
-	}
+	host, err := pd.getString()
 	if err != nil {
 		return err
 	}
@@ -1126,13 +1177,11 @@ func (b *Broker) decode(pd packetDecoder, version int16) (err error) {
 		return err
 	}
 
-	if version >= 1 && version < 9 {
+	if version >= 1 {
 		b.rack, err = pd.getNullableString()
-	} else if version >= 9 {
-		b.rack, err = pd.getCompactNullableString()
-	}
-	if err != nil {
-		return err
+		if err != nil {
+			return err
+		}
 	}
 
 	b.addr = net.JoinHostPort(host, fmt.Sprint(port))
@@ -1140,14 +1189,8 @@ func (b *Broker) decode(pd packetDecoder, version int16) (err error) {
 		return err
 	}
 
-	if version >= 9 {
-		_, err := pd.getEmptyTaggedFieldArray()
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
+	_, err = pd.getEmptyTaggedFieldArray()
+	return err
 }
 
 func (b *Broker) encode(pe packetEncoder, version int16) (err error) {
@@ -1163,11 +1206,7 @@ func (b *Broker) encode(pe packetEncoder, version int16) (err error) {
 
 	pe.putInt32(b.id)
 
-	if version < 9 {
-		err = pe.putString(host)
-	} else {
-		err = pe.putCompactString(host)
-	}
+	err = pe.putString(host)
 	if err != nil {
 		return err
 	}
@@ -1175,20 +1214,13 @@ func (b *Broker) encode(pe packetEncoder, version int16) (err error) {
 	pe.putInt32(int32(port))
 
 	if version >= 1 {
-		if version < 9 {
-			err = pe.putNullableString(b.rack)
-		} else {
-			err = pe.putNullableCompactString(b.rack)
-		}
+		err = pe.putNullableString(b.rack)
 		if err != nil {
 			return err
 		}
 	}
 
-	if version >= 9 {
-		pe.putEmptyTaggedFieldArray()
-	}
-
+	pe.putEmptyTaggedFieldArray()
 	return nil
 }
 
@@ -1256,6 +1288,40 @@ func getHeaderLength(headerVersion int16) int8 {
 	}
 }
 
+// shouldCloseBrokerConn reports whether a transport error should trigger closing.
+func shouldCloseBrokerConn(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if errors.Is(err, io.EOF) {
+		return true
+	}
+
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+
+	if errors.Is(err, io.ErrClosedPipe) {
+		return true
+	}
+
+	if errors.Is(err, net.ErrClosed) {
+		return true
+	}
+
+	if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ENOTCONN) {
+		return true
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return !netErr.Timeout()
+	}
+
+	return false
+}
+
 func (b *Broker) sendAndReceiveApiVersions(v int16) (*ApiVersionsResponse, error) {
 	rb := &ApiVersionsRequest{
 		Version:               v,
@@ -1276,7 +1342,7 @@ func (b *Broker) sendAndReceiveApiVersions(v int16) (*ApiVersionsResponse, error
 	b.updateOutgoingCommunicationMetrics(bytes)
 	if err != nil {
 		b.addRequestInFlightMetrics(-1)
-		Logger.Printf("Failed to send ApiVersions request to %s: %s\n", b.addr, err)
+		Logger.Printf("Failed to send ApiVersionsRequest V%d to %s: %s\n", v, b.addr, err)
 		return nil, err
 	}
 	b.correlationID++
@@ -1288,7 +1354,7 @@ func (b *Broker) sendAndReceiveApiVersions(v int16) (*ApiVersionsResponse, error
 	_, err = b.readFull(header)
 	if err != nil {
 		b.addRequestInFlightMetrics(-1)
-		Logger.Printf("Failed to read ApiVersions response header from %s: %s\n", b.addr, err)
+		Logger.Printf("Failed to read ApiVersionsResponse V%d header from %s: %s\n", v, b.addr, err)
 		return nil, err
 	}
 
@@ -1300,20 +1366,24 @@ func (b *Broker) sendAndReceiveApiVersions(v int16) (*ApiVersionsResponse, error
 	n, err := b.readFull(payload)
 	if err != nil {
 		b.addRequestInFlightMetrics(-1)
-		Logger.Printf("Failed to read ApiVersions response payload from %s: %s\n", b.addr, err)
+		Logger.Printf("Failed to read ApiVersionsResponse V%d payload from %s: %s\n", v, b.addr, err)
 		return nil, err
 	}
 
 	b.updateIncomingCommunicationMetrics(n+8, time.Since(requestTime))
-	res := &ApiVersionsResponse{}
-
+	res := &ApiVersionsResponse{Version: rb.version()}
 	err = versionedDecode(payload, res, rb.version(), b.metricRegistry)
 	if err != nil {
-		Logger.Printf("Failed to parse ApiVersions response from %s: %s\n", b.addr, err)
+		Logger.Printf("Failed to parse ApiVersionsResponse V%d from %s: %s\n", v, b.addr, err)
 		return nil, err
 	}
 
-	DebugLogger.Printf("Completed ApiVersions request to %s. Broker supports %d APIs\n", b.addr, len(res.ApiKeys))
+	kerr := KError(res.ErrorCode)
+	if kerr != ErrNoError {
+		return res, fmt.Errorf("Error in ApiVersionsResponse V%d from %s: %w", res.Version, b.addr, kerr)
+	}
+
+	DebugLogger.Printf("Completed ApiVersionsRequest V%d to %s. Broker supports %d APIs\n", v, b.addr, len(res.ApiKeys))
 	return res, nil
 }
 

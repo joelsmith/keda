@@ -72,12 +72,12 @@ func main() {
 		swov1.WithSecurity(os.Getenv("SWO_API_TOKEN")),
 	)
 
-	res, err := s.ChangeEvents.CreateChangeEvent(ctx, components.ChangeEvent{
-		ID:        swov1.Int64(1731676626),
+	res, err := s.ChangeEvents.CreateChangeEvent(ctx, components.ChangeEventsChangeEvent{
+		ID:        swov1.Pointer[int64](1731676626),
 		Name:      "app-deploys",
 		Title:     "deployed v45",
-		Timestamp: swov1.Int64(1731676626),
-		Source:    swov1.String("foo3.example.com"),
+		Timestamp: swov1.Pointer[int64](1731676626),
+		Source:    swov1.Pointer("foo3.example.com"),
 		Tags: map[string]string{
 			"app":         "foo",
 			"environment": "production",
@@ -130,12 +130,12 @@ func main() {
 		swov1.WithSecurity(os.Getenv("SWO_API_TOKEN")),
 	)
 
-	res, err := s.ChangeEvents.CreateChangeEvent(ctx, components.ChangeEvent{
-		ID:        swov1.Int64(1731676626),
+	res, err := s.ChangeEvents.CreateChangeEvent(ctx, components.ChangeEventsChangeEvent{
+		ID:        swov1.Pointer[int64](1731676626),
 		Name:      "app-deploys",
 		Title:     "deployed v45",
-		Timestamp: swov1.Int64(1731676626),
-		Source:    swov1.String("foo3.example.com"),
+		Timestamp: swov1.Pointer[int64](1731676626),
+		Source:    swov1.Pointer("foo3.example.com"),
 		Tags: map[string]string{
 			"app":         "foo",
 			"environment": "production",
@@ -178,29 +178,42 @@ func main() {
 ### [Dbo](docs/sdks/dbo/README.md)
 
 * [ObserveDatabase](docs/sdks/dbo/README.md#observedatabase) - Add database observability to a database
+* [GetConfig](docs/sdks/dbo/README.md#getconfig) - Get organization-level configuration for database observability agents/plugins
+* [SetConfig](docs/sdks/dbo/README.md#setconfig) - Set organization-level configuration for database observability agents/plugins
 * [GetPublicKey](docs/sdks/dbo/README.md#getpublickey) - Get public key for encrypting database credentials locally
-* [UpdateDatabase](docs/sdks/dbo/README.md#updatedatabase) - Update an observed database
 * [DeleteDatabase](docs/sdks/dbo/README.md#deletedatabase) - Delete an observed database
+* [UpdateDatabase](docs/sdks/dbo/README.md#updatedatabase) - Update an observed database
 * [GetPluginConfig](docs/sdks/dbo/README.md#getpluginconfig) - Get configuration of plugins observing a database
 * [GetPlugins](docs/sdks/dbo/README.md#getplugins) - Get status of plugins observing a database
 * [PluginOperation](docs/sdks/dbo/README.md#pluginoperation) - Apply an operation on a database observability plugin
+* [UnobserveDatabase](docs/sdks/dbo/README.md#unobservedatabase) - Unobserve an observed database
 
 ### [Dem](docs/sdks/dem/README.md)
 
 * [ListProbes](docs/sdks/dem/README.md#listprobes) - Get a list of existing synthetic probes
 * [GetDemSettings](docs/sdks/dem/README.md#getdemsettings) - Get DEM settings
 * [SetDemSettings](docs/sdks/dem/README.md#setdemsettings) - Set DEM settings
+* [CreateTransaction](docs/sdks/dem/README.md#createtransaction) - Create transaction monitoring configuration
+* [GetTransaction](docs/sdks/dem/README.md#gettransaction) - Get transaction monitoring configuration
+* [UpdateTransaction](docs/sdks/dem/README.md#updatetransaction) - Update transaction monitoring configuration
+* [DeleteTransaction](docs/sdks/dem/README.md#deletetransaction) - Delete transaction
+* [PauseTransactionMonitoring](docs/sdks/dem/README.md#pausetransactionmonitoring) - Pause monitoring of the transaction
+* [UnpauseTransactionMonitoring](docs/sdks/dem/README.md#unpausetransactionmonitoring) - Unpause monitoring of the transaction
 * [CreateURI](docs/sdks/dem/README.md#createuri) - Create URI monitoring configuration
 * [GetURI](docs/sdks/dem/README.md#geturi) - Get URI monitoring configuration
 * [UpdateURI](docs/sdks/dem/README.md#updateuri) - Update URI monitoring configuration
 * [DeleteURI](docs/sdks/dem/README.md#deleteuri) - Delete URI
+* [GetURIOutageStatuses](docs/sdks/dem/README.md#geturioutagestatuses) - Get outage statuses
 * [PauseURIMonitoring](docs/sdks/dem/README.md#pauseurimonitoring) - Pause monitoring of the URI
+* [GetURITestResults](docs/sdks/dem/README.md#geturitestresults) - Get test results
 * [UnpauseURIMonitoring](docs/sdks/dem/README.md#unpauseurimonitoring) - Unpause monitoring of the URI
 * [CreateWebsite](docs/sdks/dem/README.md#createwebsite) - Create website monitoring configuration
 * [GetWebsite](docs/sdks/dem/README.md#getwebsite) - Get website monitoring configuration
 * [UpdateWebsite](docs/sdks/dem/README.md#updatewebsite) - Update website monitoring configuration
 * [DeleteWebsite](docs/sdks/dem/README.md#deletewebsite) - Delete website
+* [GetWebsiteOutageStatuses](docs/sdks/dem/README.md#getwebsiteoutagestatuses) - Get outage statuses
 * [PauseWebsiteMonitoring](docs/sdks/dem/README.md#pausewebsitemonitoring) - Pause monitoring of a website
+* [GetWebsiteTestResults](docs/sdks/dem/README.md#getwebsitetestresults) - Get test results
 * [UnpauseWebsiteMonitoring](docs/sdks/dem/README.md#unpausewebsitemonitoring) - Unpause monitoring of a website
 
 ### [Entities](docs/sdks/entities/README.md)
@@ -224,13 +237,12 @@ func main() {
 * [ListMetrics](docs/sdks/metrics/README.md#listmetrics) - List metrics
 * [CreateCompositeMetric](docs/sdks/metrics/README.md#createcompositemetric) - Create composite metric
 * [ListMultiMetricMeasurements](docs/sdks/metrics/README.md#listmultimetricmeasurements) - List measurements for a batch of metrics
+* [GetMetricByName](docs/sdks/metrics/README.md#getmetricbyname) - Get metric info by name
 * [UpdateCompositeMetric](docs/sdks/metrics/README.md#updatecompositemetric) - Update composite metric
 * [DeleteCompositeMetric](docs/sdks/metrics/README.md#deletecompositemetric) - Delete composite metric
-* [GetMetricByName](docs/sdks/metrics/README.md#getmetricbyname) - Get metric info by name
 * [ListMetricAttributes](docs/sdks/metrics/README.md#listmetricattributes) - List metric attribute names
 * [ListMetricAttributeValues](docs/sdks/metrics/README.md#listmetricattributevalues) - List metric attribute values
 * [ListMetricMeasurements](docs/sdks/metrics/README.md#listmetricmeasurements) - List metric measurement values, grouped by attributes, filtered by the filter. An empty list indicates no data points are available for the given parameters.
-
 
 ### [Tokens](docs/sdks/tokens/README.md)
 
@@ -254,6 +266,7 @@ import (
 	"context"
 	"github.com/solarwinds/swo-sdk-go/swov1"
 	"github.com/solarwinds/swo-sdk-go/swov1/models/operations"
+	"github.com/solarwinds/swo-sdk-go/swov1/types"
 	"log"
 	"os"
 )
@@ -265,8 +278,10 @@ func main() {
 		swov1.WithSecurity(os.Getenv("SWO_API_TOKEN")),
 	)
 
-	res, err := s.Entities.ListEntities(ctx, operations.ListEntitiesRequest{
-		Type: "<value>",
+	res, err := s.Dem.GetURIOutageStatuses(ctx, operations.GetURIOutageStatusesRequest{
+		EntityID:  "<id>",
+		StartTime: types.MustTimeFromString("2025-01-07T04:04:57.949Z"),
+		EndTime:   types.MustTimeFromString("2026-12-19T15:16:56.899Z"),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -317,12 +332,12 @@ func main() {
 		swov1.WithSecurity(os.Getenv("SWO_API_TOKEN")),
 	)
 
-	res, err := s.ChangeEvents.CreateChangeEvent(ctx, components.ChangeEvent{
-		ID:        swov1.Int64(1731676626),
+	res, err := s.ChangeEvents.CreateChangeEvent(ctx, components.ChangeEventsChangeEvent{
+		ID:        swov1.Pointer[int64](1731676626),
 		Name:      "app-deploys",
 		Title:     "deployed v45",
-		Timestamp: swov1.Int64(1731676626),
-		Source:    swov1.String("foo3.example.com"),
+		Timestamp: swov1.Pointer[int64](1731676626),
+		Source:    swov1.Pointer("foo3.example.com"),
 		Tags: map[string]string{
 			"app":         "foo",
 			"environment": "production",
@@ -385,12 +400,12 @@ func main() {
 		swov1.WithSecurity(os.Getenv("SWO_API_TOKEN")),
 	)
 
-	res, err := s.ChangeEvents.CreateChangeEvent(ctx, components.ChangeEvent{
-		ID:        swov1.Int64(1731676626),
+	res, err := s.ChangeEvents.CreateChangeEvent(ctx, components.ChangeEventsChangeEvent{
+		ID:        swov1.Pointer[int64](1731676626),
 		Name:      "app-deploys",
 		Title:     "deployed v45",
-		Timestamp: swov1.Int64(1731676626),
-		Source:    swov1.String("foo3.example.com"),
+		Timestamp: swov1.Pointer[int64](1731676626),
+		Source:    swov1.Pointer("foo3.example.com"),
 		Tags: map[string]string{
 			"app":         "foo",
 			"environment": "production",
@@ -420,15 +435,14 @@ Handling errors in this SDK should largely match your expectations. All operatio
 
 By Default, an API error will return `apierrors.APIError`. When custom error responses are specified for an operation, the SDK may also return their associated error. You can refer to respective *Errors* tables in SDK docs for more details on possible error types for each operation.
 
-For example, the `ActivateAwsIntegration` function may return the following errors:
+For example, the `CreateChangeEvent` function may return the following errors:
 
-| Error Type                                                           | Status Code | Content Type     |
-| -------------------------------------------------------------------- | ----------- | ---------------- |
-| apierrors.ActivateAwsIntegrationResponseBody                         | 400         | application/json |
-| apierrors.ActivateAwsIntegrationCloudAccountsResponseBody            | 401         | application/json |
-| apierrors.ActivateAwsIntegrationCloudAccountsResponseResponseBody    | 404         | application/json |
-| apierrors.ActivateAwsIntegrationCloudAccountsResponse500ResponseBody | 500         | application/json |
-| apierrors.APIError                                                   | 4XX, 5XX    | \*/\*            |
+| Error Type                                | Status Code | Content Type     |
+| ----------------------------------------- | ----------- | ---------------- |
+| apierrors.CommonBadRequestErrorResponse   | 400         | application/json |
+| apierrors.CommonUnauthorizedErrorResponse | 401         | application/json |
+| apierrors.CommonInternalErrorResponse     | 500         | application/json |
+| apierrors.APIError                        | 4XX, 5XX    | \*/\*            |
 
 ### Example
 
@@ -452,32 +466,38 @@ func main() {
 		swov1.WithSecurity(os.Getenv("SWO_API_TOKEN")),
 	)
 
-	res, err := s.CloudAccounts.ActivateAwsIntegration(ctx, components.ActivateAwsIntegrationRequest{
-		ManagementAccountID: "<id>",
-		AccountID:           "<id>",
-		Enable:              true,
+	res, err := s.ChangeEvents.CreateChangeEvent(ctx, components.ChangeEventsChangeEvent{
+		ID:        swov1.Pointer[int64](1731676626),
+		Name:      "app-deploys",
+		Title:     "deployed v45",
+		Timestamp: swov1.Pointer[int64](1731676626),
+		Source:    swov1.Pointer("foo3.example.com"),
+		Tags: map[string]string{
+			"app":         "foo",
+			"environment": "production",
+		},
+		Links: []components.CommonLink{
+			components.CommonLink{
+				Rel:  "self",
+				Href: "https://example.com",
+			},
+		},
 	})
 	if err != nil {
 
-		var e *apierrors.ActivateAwsIntegrationResponseBody
+		var e *apierrors.CommonBadRequestErrorResponse
 		if errors.As(err, &e) {
 			// handle error
 			log.Fatal(e.Error())
 		}
 
-		var e *apierrors.ActivateAwsIntegrationCloudAccountsResponseBody
+		var e *apierrors.CommonUnauthorizedErrorResponse
 		if errors.As(err, &e) {
 			// handle error
 			log.Fatal(e.Error())
 		}
 
-		var e *apierrors.ActivateAwsIntegrationCloudAccountsResponseResponseBody
-		if errors.As(err, &e) {
-			// handle error
-			log.Fatal(e.Error())
-		}
-
-		var e *apierrors.ActivateAwsIntegrationCloudAccountsResponse500ResponseBody
+		var e *apierrors.CommonInternalErrorResponse
 		if errors.As(err, &e) {
 			// handle error
 			log.Fatal(e.Error())
@@ -522,16 +542,17 @@ func main() {
 	ctx := context.Background()
 
 	s := swov1.New(
-		swov1.WithRegion("<value>"),
+		swov1.WithServerIndex(0),
+		swov1.WithRegion("na-01"),
 		swov1.WithSecurity(os.Getenv("SWO_API_TOKEN")),
 	)
 
-	res, err := s.ChangeEvents.CreateChangeEvent(ctx, components.ChangeEvent{
-		ID:        swov1.Int64(1731676626),
+	res, err := s.ChangeEvents.CreateChangeEvent(ctx, components.ChangeEventsChangeEvent{
+		ID:        swov1.Pointer[int64](1731676626),
 		Name:      "app-deploys",
 		Title:     "deployed v45",
-		Timestamp: swov1.Int64(1731676626),
-		Source:    swov1.String("foo3.example.com"),
+		Timestamp: swov1.Pointer[int64](1731676626),
+		Source:    swov1.Pointer("foo3.example.com"),
 		Tags: map[string]string{
 			"app":         "foo",
 			"environment": "production",
@@ -575,12 +596,12 @@ func main() {
 		swov1.WithSecurity(os.Getenv("SWO_API_TOKEN")),
 	)
 
-	res, err := s.ChangeEvents.CreateChangeEvent(ctx, components.ChangeEvent{
-		ID:        swov1.Int64(1731676626),
+	res, err := s.ChangeEvents.CreateChangeEvent(ctx, components.ChangeEventsChangeEvent{
+		ID:        swov1.Pointer[int64](1731676626),
 		Name:      "app-deploys",
 		Title:     "deployed v45",
-		Timestamp: swov1.Int64(1731676626),
-		Source:    swov1.String("foo3.example.com"),
+		Timestamp: swov1.Pointer[int64](1731676626),
+		Source:    swov1.Pointer("foo3.example.com"),
 		Tags: map[string]string{
 			"app":         "foo",
 			"environment": "production",
@@ -620,12 +641,13 @@ The built-in `net/http` client satisfies this interface and a default client bas
 import (
 	"net/http"
 	"time"
-	"github.com/myorg/your-go-sdk"
+
+	"github.com/solarwinds/swo-sdk-go/swov1"
 )
 
 var (
 	httpClient = &http.Client{Timeout: 30 * time.Second}
-	sdkClient  = sdk.New(sdk.WithClient(httpClient))
+	sdkClient  = swov1.New(swov1.WithClient(httpClient))
 )
 ```
 

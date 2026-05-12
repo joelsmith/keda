@@ -26,7 +26,6 @@ package aws
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -38,6 +37,9 @@ import (
 
 // ErrAwsNoAccessKey is returned when awsAccessKeyID is missing.
 var ErrAwsNoAccessKey = errors.New("awsAccessKeyID not found")
+
+// ErrAwsNoSecretAccessKey is returned when awsSecretAccessKey is missing.
+var ErrAwsNoSecretAccessKey = errors.New("awsSecretAccessKey not found")
 
 var awsSharedCredentialsCache = newSharedConfigsCache()
 
@@ -65,7 +67,11 @@ func GetAwsConfig(ctx context.Context, awsAuthorization AuthorizationMetadata) (
 
 	if awsAuthorization.AwsRoleArn != "" {
 		stsSvc := sts.NewFromConfig(cfg)
-		stsCredentialProvider := stscreds.NewAssumeRoleProvider(stsSvc, awsAuthorization.AwsRoleArn, func(_ *stscreds.AssumeRoleOptions) {})
+		stsCredentialProvider := stscreds.NewAssumeRoleProvider(stsSvc, awsAuthorization.AwsRoleArn, func(options *stscreds.AssumeRoleOptions) {
+			if awsAuthorization.AwsExternalID != "" {
+				options.ExternalID = aws.String(awsAuthorization.AwsExternalID)
+			}
+		})
 		cfg.Credentials = aws.NewCredentialsCache(stsCredentialProvider)
 	}
 	return &cfg, err
@@ -81,9 +87,17 @@ func GetAwsAuthorization(uniqueKey, awsRegion string, podIdentity kedav1alpha1.A
 
 	if podIdentity.Provider == kedav1alpha1.PodIdentityProviderAws {
 		meta.UsingPodIdentity = true
-		if val, ok := authParams["awsRoleArn"]; ok && val != "" {
-			meta.AwsRoleArn = val
+		if podIdentity.RoleArn != nil && *podIdentity.RoleArn != "" {
+			meta.AwsRoleArn = *podIdentity.RoleArn
+			if podIdentity.ExternalID != nil && *podIdentity.ExternalID != "" {
+				meta.AwsExternalID = *podIdentity.ExternalID
+			}
+		} else {
+			if val, ok := authParams["awsRoleArn"]; ok && val != "" {
+				meta.AwsRoleArn = val
+			}
 		}
+
 		return meta, nil
 	}
 
@@ -98,13 +112,16 @@ func GetAwsAuthorization(uniqueKey, awsRegion string, podIdentity kedav1alpha1.A
 		switch {
 		case authParams["awsRoleArn"] != "":
 			meta.AwsRoleArn = authParams["awsRoleArn"]
-		case (authParams["awsAccessKeyID"] != "" || authParams["awsAccessKeyId"] != "") && authParams["awsSecretAccessKey"] != "":
+		case authParams["awsAccessKeyID"] != "" || authParams["awsAccessKeyId"] != "":
 			meta.AwsAccessKeyID = authParams["awsAccessKeyID"]
 			if meta.AwsAccessKeyID == "" {
 				meta.AwsAccessKeyID = authParams["awsAccessKeyId"]
 			}
 			meta.AwsSecretAccessKey = authParams["awsSecretAccessKey"]
 			meta.AwsSessionToken = authParams["awsSessionToken"]
+			if len(meta.AwsSecretAccessKey) == 0 {
+				return meta, ErrAwsNoSecretAccessKey
+			}
 		default:
 			if triggerMetadata["awsAccessKeyID"] != "" {
 				meta.AwsAccessKeyID = triggerMetadata["awsAccessKeyID"]
@@ -121,7 +138,7 @@ func GetAwsAuthorization(uniqueKey, awsRegion string, podIdentity kedav1alpha1.A
 			}
 
 			if len(meta.AwsSecretAccessKey) == 0 {
-				return meta, fmt.Errorf("awsSecretAccessKey not found")
+				return meta, ErrAwsNoSecretAccessKey
 			}
 		}
 	}

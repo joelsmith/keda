@@ -272,15 +272,24 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zapOpts...))
 
+	// Warn about deprecated logging flags
+	if cmd.Flags().Changed("v") {
+		setupLog.Info("DEPRECATION WARNING: The '-v' flag is deprecated and will be removed in a future release. Please use '--zap-log-level' instead (e.g., '--zap-log-level=-1' for info, '--zap-log-level=-2' for debug)")
+	}
+	if cmd.Flags().Changed("logtostderr") {
+		setupLog.Info("DEPRECATION WARNING: The '--logtostderr' flag is deprecated and will be removed in a future release. Please use '--zap-encoder=console' instead")
+	}
+	if cmd.Flags().Changed("stderrthreshold") {
+		setupLog.Info("DEPRECATION WARNING: The '--stderrthreshold' flag is deprecated and has no equivalent in the new logging system. This flag is a no-op and will be removed in a future release")
+	}
+
 	err = printWelcomeMsg(cmd)
 	if err != nil {
 		return
 	}
 
-	err = kedautil.ConfigureMaxProcs(setupLog)
-	if err != nil {
-		setupLog.Error(err, "failed to set max procs")
-		return
+	if err := kedautil.ConfigureMaxProcs(setupLog); err != nil {
+		setupLog.Info("failed to set max procs, using default GOMAXPROCS", "error", err)
 	}
 
 	kedaProvider, err := cmd.makeProvider(ctx)

@@ -106,9 +106,7 @@ func (r *ScaledJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	err := r.Get(ctx, req.NamespacedName, scaledJob)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			// Request object not found, could have been deleted after reconcile request.
-			// Owned objects are automatically garbage collected. For additional cleanup logic use finalizers.
-			// Return and don't requeue
+			r.updatePromMetricsOnDelete(req.String())
 			return ctrl.Result{}, nil
 		}
 		// Error reading the object - requeue the request.
@@ -123,12 +121,13 @@ func (r *ScaledJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if scaledJob.GetDeletionTimestamp() != nil {
 		return ctrl.Result{}, r.finalizeScaledJob(ctx, reqLogger, scaledJob, req.String())
 	}
-	r.updatePromMetrics(scaledJob, req.String())
 
 	// ensure finalizer is set on this CR
 	if err := r.ensureFinalizer(ctx, reqLogger, scaledJob); err != nil {
 		return ctrl.Result{}, err
 	}
+
+	r.updatePromMetrics(scaledJob, req.String())
 
 	// ensure Status Conditions are initialized
 	if !scaledJob.Status.Conditions.AreInitialized() {
@@ -228,35 +227,32 @@ func (r *ScaledJobReconciler) reconcileScaledJob(ctx context.Context, logger log
 	return "ScaledJob is defined correctly and is ready to scaling", nil
 }
 
-// checkIfPaused checks the presence of "autoscaling.keda.sh/paused" annotation on the scaledJob and stop the scale loop.
+// checkIfPaused checks the presence of "autoscaling.keda.sh/paused" annotation on the scaledJob and stops the scale loop.
 func (r *ScaledJobReconciler) checkIfPaused(ctx context.Context, logger logr.Logger, scaledJob *kedav1alpha1.ScaledJob, conditions *kedav1alpha1.Conditions) (bool, error) {
-	pausedAnnotationValue, pausedAnnotation := scaledJob.GetAnnotations()[kedav1alpha1.PausedAnnotation]
-	pausedStatus := conditions.GetPausedCondition().Status == metav1.ConditionTrue
-	shouldPause := false
-	if pausedAnnotation {
-		var err error
-		shouldPause, err = strconv.ParseBool(pausedAnnotationValue)
-		if err != nil {
-			shouldPause = true
-		}
-	}
+	shouldPause := scaledJob.NeedToBePausedByAnnotation()
+	isPausedInStatus := conditions.GetPausedCondition().Status == metav1.ConditionTrue
+
 	if shouldPause {
-		if !pausedStatus {
-			logger.Info("ScaledJob is paused, stopping scaling loop.")
+		// Set Paused condition before stopping scale loop to prevent races with new reconciles
+		if !isPausedInStatus {
 			msg := kedav1alpha1.ScaledJobConditionPausedMessage
-			if err := r.stopScaleLoop(ctx, logger, scaledJob); err != nil {
-				msg = "failed to stop the scale loop for paused ScaledJob"
-				conditions.SetPausedCondition(metav1.ConditionFalse, "ScaledJobStopScaleLoopFailed", msg)
+			conditions.SetPausedCondition(metav1.ConditionTrue, kedav1alpha1.ScaledJobConditionPausedReason, msg)
+			if err := kedastatus.SetStatusConditions(ctx, r.Client, logger, scaledJob, conditions); err != nil {
 				return false, err
 			}
-			conditions.SetPausedCondition(metav1.ConditionTrue, kedav1alpha1.ScaledJobConditionPausedReason, msg)
+			r.EventEmitter.Emit(scaledJob, scaledJob.Namespace, corev1.EventTypeNormal, eventingv1alpha1.ScaledJobPausedType, eventreason.ScaledJobPaused, msg)
+		}
+
+		if err := r.stopScaleLoop(ctx, logger, scaledJob); err != nil {
+			return false, err
 		}
 		return true, nil
 	}
-	if pausedStatus {
-		logger.Info("Unpausing ScaledJob.")
+
+	if isPausedInStatus {
 		msg := kedav1alpha1.ScaledJobConditionUnpausedMessage
 		conditions.SetPausedCondition(metav1.ConditionFalse, kedav1alpha1.ScaledJobConditionUnpausedReason, msg)
+		r.EventEmitter.Emit(scaledJob, scaledJob.Namespace, corev1.EventTypeNormal, eventingv1alpha1.ScaledJobUnpausedType, eventreason.ScaledJobUnpaused, msg)
 	}
 	return false, nil
 }
@@ -264,9 +260,9 @@ func (r *ScaledJobReconciler) checkIfPaused(ctx context.Context, logger logr.Log
 // Delete Jobs owned by the previous version of the scaledJob based on the rolloutStrategy given for this scaledJob, if any
 func (r *ScaledJobReconciler) deletePreviousVersionScaleJobs(ctx context.Context, logger logr.Logger, scaledJob *kedav1alpha1.ScaledJob) (string, error) {
 	var rolloutStrategy string
-	if len(scaledJob.Spec.RolloutStrategy) > 0 {
-		logger.Info("RolloutStrategy is deprecated, please us Rollout.Strategy in order to define the desired strategy for job rollouts")
-		rolloutStrategy = scaledJob.Spec.RolloutStrategy
+	if len(scaledJob.Spec.RolloutStrategy) > 0 { //nolint:staticcheck // SA1019: intentional use of deprecated field for backward compatibility
+		logger.Info("RolloutStrategy is deprecated, please use Rollout.Strategy in order to define the desired strategy for job rollouts")
+		rolloutStrategy = scaledJob.Spec.RolloutStrategy //nolint:staticcheck // SA1019
 	} else {
 		rolloutStrategy = scaledJob.Spec.Rollout.Strategy
 	}
@@ -301,6 +297,7 @@ func (r *ScaledJobReconciler) deletePreviousVersionScaleJobs(ctx context.Context
 			logger.Info("RolloutStrategy: immediate, No jobs owned by the previous version of the scaledJob")
 		} else {
 			logger.Info("RolloutStrategy: immediate, Deleting jobs owned by the previous version of the scaledJob", "numJobsToDelete", len(jobIndexes))
+			r.EventEmitter.Emit(scaledJob, scaledJob.Namespace, corev1.EventTypeNormal, eventingv1alpha1.ScaledJobRolloutCleanupStartedType, eventreason.ScaledJobRolloutCleanupStarted, fmt.Sprintf("Deleting %d jobs owned by the previous version of the scaledJob", len(jobIndexes)))
 			for _, index := range jobIndexes {
 				job := jobs.Items[index]
 
@@ -310,13 +307,15 @@ func (r *ScaledJobReconciler) deletePreviousVersionScaleJobs(ctx context.Context
 				}
 				err = r.Delete(ctx, &job, client.PropagationPolicy(propagationPolicy))
 				if err != nil {
+					r.EventEmitter.Emit(scaledJob, scaledJob.Namespace, corev1.EventTypeWarning, eventingv1alpha1.ScaledJobRolloutCleanupFailedType, eventreason.ScaledJobRolloutCleanupFailed, fmt.Sprintf("Failed to delete job %s: %v", job.Name, err))
 					return "Not able to delete job: " + job.Name, err
 				}
 			}
+			r.EventEmitter.Emit(scaledJob, scaledJob.Namespace, corev1.EventTypeNormal, eventingv1alpha1.ScaledJobRolloutCleanupCompletedType, eventreason.ScaledJobRolloutCleanupCompleted, fmt.Sprintf("Deleted %d jobs owned by the previous version of the scaledJob", len(jobIndexes)))
 			return fmt.Sprintf("RolloutStrategy: immediate, deleted jobs owned by the previous version of the scaleJob: %d jobs deleted", len(jobIndexes)), nil
 		}
 	}
-	return fmt.Sprintf("RolloutStrategy: %s", scaledJob.Spec.RolloutStrategy), nil
+	return fmt.Sprintf("RolloutStrategy: %s", rolloutStrategy), nil
 }
 
 // requestScaleLoop request ScaleLoop handler for the respective ScaledJob

@@ -547,7 +547,7 @@ func TestNewGitHubRunnerScaler_404(t *testing.T) {
 		t.Fail()
 	}
 
-	if !strings.HasSuffix(err.Error(), "404 response: not found") {
+	if !strings.HasSuffix(err.Error(), "status: 404") {
 		t.Fail()
 	}
 }
@@ -815,6 +815,39 @@ func TestNewGitHubRunnerScaler_QueueLength_MultiRepo_PulledRepos_NoRate(t *testi
 	}
 
 	if !strings.HasPrefix(err.Error(), "GitHub API rate limit exceeded") {
+		t.Fail()
+	}
+}
+
+func TestNewGitHubRunnerScaler_QueueLength_SingleRepo_WithRateLimit(t *testing.T) {
+	// First call sets the cached queue length
+	apiStub := apiStubHandler(true, false)
+	meta := getGitHubTestMetaData(apiStub.URL)
+
+	scaler := githubRunnerScaler{
+		metadata:   meta,
+		httpClient: http.DefaultClient,
+	}
+	scaler.metadata.Repos = []string{"test"}
+	scaler.metadata.Labels = []string{"foo", "bar"}
+
+	if queueLen, err := scaler.GetWorkflowQueueLength(context.Background()); err != nil {
+		fmt.Println(err)
+		t.Fail()
+	} else if queueLen != 1 {
+		fmt.Printf("Expected queue length of 1 got %d\n", queueLen)
+		t.Fail()
+	}
+
+	// Simulate rate limit - should return cached queue length
+	scaler.rateLimit.Remaining = 0
+	scaler.rateLimit.ResetTime = time.Now().Add(5 * time.Minute)
+
+	if queueLen, err := scaler.GetWorkflowQueueLength(context.Background()); err != nil {
+		fmt.Println(err)
+		t.Fail()
+	} else if queueLen != 1 {
+		fmt.Printf("Expected cached queue length of 1 after rate limit, got %d\n", queueLen)
 		t.Fail()
 	}
 }

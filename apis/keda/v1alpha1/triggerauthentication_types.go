@@ -30,6 +30,7 @@ import (
 // +kubebuilder:printcolumn:name="PodIdentity",type="string",JSONPath=".spec.podIdentity.provider"
 // +kubebuilder:printcolumn:name="Secret",type="string",JSONPath=".spec.secretTargetRef[*].name"
 // +kubebuilder:printcolumn:name="Env",type="string",JSONPath=".spec.env[*].name"
+// +kubebuilder:printcolumn:name="FilePath",type="string",JSONPath=".spec.filePath"
 // +kubebuilder:printcolumn:name="VaultAddress",type="string",JSONPath=".spec.hashiCorpVault.address"
 // +kubebuilder:printcolumn:name="ScaledObjects",type="string",priority=1,JSONPath=".status.scaledobjects"
 // +kubebuilder:printcolumn:name="ScaledJobs",type="string",priority=1,JSONPath=".status.scaledjobs"
@@ -83,6 +84,11 @@ type TriggerAuthenticationSpec struct {
 
 	// +optional
 	Env []AuthEnvironment `json:"env,omitempty"`
+
+	// FilePath specifies a file containing auth parameters as JSON map[string]string.
+	// When set, auth params are read directly from this file instead.
+	// +optional
+	FilePath string `json:"filePath,omitempty"`
 
 	// +optional
 	HashiCorpVault *HashiCorpVault `json:"hashiCorpVault,omitempty"`
@@ -156,6 +162,10 @@ type AuthPodIdentity struct {
 	// RoleArn sets the AWS RoleArn to be used. Mutually exclusive with IdentityOwner
 	RoleArn *string `json:"roleArn,omitempty"`
 
+	// +kubebuilder:validation:Optional
+	// ExternalID sets the External ID to be used when assuming an identity. This is only applicable when using AWS pod identity with a RoleArn.
+	ExternalID *string `json:"externalID,omitempty"`
+
 	// +kubebuilder:validation:Enum=keda;workload
 	// +optional
 	// IdentityOwner configures which identity has to be used during auto discovery, keda or the scaled workload. Mutually exclusive with roleArn
@@ -217,7 +227,8 @@ type AuthEnvironment struct {
 type HashiCorpVault struct {
 	Address        string              `json:"address"`
 	Authentication VaultAuthentication `json:"authentication"`
-	Secrets        []VaultSecret       `json:"secrets"`
+	// +kubebuilder:validation:MinItems=1
+	Secrets []VaultSecret `json:"secrets"`
 
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
@@ -245,6 +256,7 @@ type Credential struct {
 }
 
 // VaultAuthentication contains the list of Hashicorp Vault authentication methods
+// +kubebuilder:validation:Enum=token;kubernetes
 type VaultAuthentication string
 
 // Client authenticating to Vault
@@ -255,6 +267,7 @@ const (
 )
 
 // VaultSecretType defines the type of vault secret
+// +kubebuilder:validation:Enum="";secretV2;secret;pki
 type VaultSecretType string
 
 const (
@@ -286,8 +299,9 @@ type VaultSecret struct {
 
 // AzureKeyVault is used to authenticate using Azure Key Vault
 type AzureKeyVault struct {
-	VaultURI string                `json:"vaultUri"`
-	Secrets  []AzureKeyVaultSecret `json:"secrets"`
+	VaultURI string `json:"vaultUri"`
+	// +kubebuilder:validation:MinItems=1
+	Secrets []AzureKeyVaultSecret `json:"secrets"`
 	// +optional
 	Credentials *AzureKeyVaultCredentials `json:"credentials"`
 	// +optional
@@ -331,6 +345,7 @@ type AzureKeyVaultCloudInfo struct {
 }
 
 type GCPSecretManager struct {
+	// +kubebuilder:validation:MinItems=1
 	Secrets []GCPSecretManagerSecret `json:"secrets"`
 	// +optional
 	Credentials *GCPCredentials `json:"credentials"`
@@ -355,6 +370,7 @@ type GCPSecretManagerSecret struct {
 
 // AwsSecretManager is used to authenticate using AwsSecretManager
 type AwsSecretManager struct {
+	// +kubebuilder:validation:MinItems=1
 	Secrets []AwsSecretManagerSecret `json:"secrets"`
 	// +optional
 	Credentials *AwsSecretManagerCredentials `json:"credentials"`
