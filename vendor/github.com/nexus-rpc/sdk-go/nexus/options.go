@@ -1,9 +1,5 @@
 package nexus
 
-import (
-	"time"
-)
-
 // StartOperationOptions are options for the StartOperation client and server APIs.
 type StartOperationOptions struct {
 	// Header contains the request header fields either received by the server or to be sent by the client.
@@ -29,29 +25,6 @@ type StartOperationOptions struct {
 	// Links contain arbitrary caller information. Handlers may use these links as
 	// metadata on resources associated with and operation.
 	Links []Link
-}
-
-// GetOperationResultOptions are options for the GetOperationResult client and server APIs.
-type GetOperationResultOptions struct {
-	// Header contains the request header fields either received by the server or to be sent by the client.
-	//
-	// Header will always be non empty in server methods and can be optionally set in the client API.
-	//
-	// Header values set here will overwrite any SDK-provided values for the same key.
-	Header Header
-	// If non-zero, reflects the duration the caller has indicated that it wants to wait for operation completion,
-	// turning the request into a long poll.
-	Wait time.Duration
-}
-
-// GetOperationInfoOptions are options for the GetOperationInfo client and server APIs.
-type GetOperationInfoOptions struct {
-	// Header contains the request header fields either received by the server or to be sent by the client.
-	//
-	// Header will always be non empty in server methods and can be optionally set in the client API.
-	//
-	// Header values set here will overwrite any SDK-provided values for the same key.
-	Header Header
 }
 
 // CancelOperationOptions are options for the CancelOperation client and server APIs.

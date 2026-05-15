@@ -84,25 +84,6 @@ type OperationHandler[I, O any] interface {
 	// started. Return an [OperationError] to indicate that an operation completed as failed or
 	// canceled.
 	Start(ctx context.Context, input I, options StartOperationOptions) (HandlerStartOperationResult[O], error)
-	// GetResult handles requests to get the result of an asynchronous operation. Return non error result to respond
-	// successfully - inline, or error with [ErrOperationStillRunning] to indicate that an asynchronous operation is
-	// still running. Return an [OperationError] to indicate that an operation completed as failed or
-	// canceled.
-	//
-	// When [GetOperationResultOptions.Wait] is greater than zero, this request should be treated as a long poll.
-	// Long poll requests have a server side timeout, configurable via [HandlerOptions.GetResultTimeout], and exposed
-	// via context deadline. The context deadline is decoupled from the application level Wait duration.
-	//
-	// It is the implementor's responsiblity to respect the client's wait duration and return in a timely fashion.
-	// Consider using a derived context that enforces the wait timeout when implementing this method and return
-	// [ErrOperationStillRunning] when that context expires as shown in the [Handler] example.
-	//
-	// NOTE: Experimental
-	GetResult(ctx context.Context, token string, options GetOperationResultOptions) (O, error)
-	// GetInfo handles requests to get information about an asynchronous operation.
-	//
-	// NOTE: Experimental
-	GetInfo(ctx context.Context, token string, options GetOperationInfoOptions) (*OperationInfo, error)
 	// Cancel handles requests to cancel an asynchronous operation.
 	// Cancelation in Nexus is:
 	//  1. asynchronous - returning from this method only ensures that cancelation is delivered, it may later be
@@ -116,15 +97,15 @@ type OperationHandler[I, O any] interface {
 type syncOperation[I, O any] struct {
 	UnimplementedOperation[I, O]
 
-	Handler func(context.Context, I, StartOperationOptions) (O, error)
+	handler func(context.Context, I, StartOperationOptions) (O, error)
 	name    string
 }
 
 // NewSyncOperation is a helper for creating a synchronous-only [Operation] from a given name and handler function.
-func NewSyncOperation[I, O any](name string, handler func(context.Context, I, StartOperationOptions) (O, error)) Operation[I, O] {
+func NewSyncOperation[I, O any](name string, handler func(ctx context.Context, input I, options StartOperationOptions) (O, error)) Operation[I, O] {
 	return &syncOperation[I, O]{
 		name:    name,
-		Handler: handler,
+		handler: handler,
 	}
 }
 
@@ -135,7 +116,7 @@ func (h *syncOperation[I, O]) Name() string {
 
 // Start implements Operation.
 func (h *syncOperation[I, O]) Start(ctx context.Context, input I, options StartOperationOptions) (HandlerStartOperationResult[O], error) {
-	o, err := h.Handler(ctx, input, options)
+	o, err := h.handler(ctx, input, options)
 	if err != nil {
 		return nil, err
 	}
@@ -241,6 +222,16 @@ func (r *ServiceRegistry) Register(services ...*Service) error {
 	return nil
 }
 
+// Register one or more service.
+// Panics if duplicate operations were registered with the same name or when trying to register a service with no name.
+//
+// Can be called multiple times and is not thread safe.
+func (r *ServiceRegistry) MustRegister(services ...*Service) {
+	if err := r.Register(services...); err != nil {
+		panic(err)
+	}
+}
+
 // Use registers one or more middleware to be applied to all operation method invocations across all registered
 // services. Middleware is applied in registration order. If called multiple times, newly registered middleware will be
 // applied after any previously registered ones.
@@ -275,11 +266,11 @@ func (r *registryHandler) operationHandler(ctx context.Context) (OperationHandle
 	options := ExtractHandlerInfo(ctx)
 	s, ok := r.services[options.Service]
 	if !ok {
-		return nil, HandlerErrorf(HandlerErrorTypeNotFound, "service %q not found", options.Service)
+		return nil, NewHandlerErrorf(HandlerErrorTypeNotFound, "service %q not found", options.Service)
 	}
 	h, ok := s.operations[options.Operation]
 	if !ok {
-		return nil, HandlerErrorf(HandlerErrorTypeNotFound, "operation %q not found", options.Operation)
+		return nil, NewHandlerErrorf(HandlerErrorTypeNotFound, "operation %q not found", options.Operation)
 	}
 
 	var handler OperationHandler[any, any]
@@ -303,33 +294,15 @@ func (r *registryHandler) CancelOperation(ctx context.Context, service, operatio
 	return h.Cancel(ctx, token, options)
 }
 
-// operationHandlerInfo implements Handler.
-func (r *registryHandler) GetOperationInfo(ctx context.Context, service, operation, token string, options GetOperationInfoOptions) (*OperationInfo, error) {
-	h, err := r.operationHandler(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return h.GetInfo(ctx, token, options)
-}
-
-// operationHandlerResult implements Handler.
-func (r *registryHandler) GetOperationResult(ctx context.Context, service, operation, token string, options GetOperationResultOptions) (any, error) {
-	h, err := r.operationHandler(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return h.GetResult(ctx, token, options)
-}
-
 // StartOperation implements Handler.
 func (r *registryHandler) StartOperation(ctx context.Context, service, operation string, input *LazyValue, options StartOperationOptions) (HandlerStartOperationResult[any], error) {
 	s, ok := r.services[service]
 	if !ok {
-		return nil, HandlerErrorf(HandlerErrorTypeNotFound, "service %q not found", service)
+		return nil, NewHandlerErrorf(HandlerErrorTypeNotFound, "service %q not found", service)
 	}
 	ro, ok := s.operations[operation]
 	if !ok {
-		return nil, HandlerErrorf(HandlerErrorTypeNotFound, "operation %q not found", operation)
+		return nil, NewHandlerErrorf(HandlerErrorTypeNotFound, "operation %q not found", operation)
 	}
 
 	h, err := r.operationHandler(ctx)
@@ -341,7 +314,7 @@ func (r *registryHandler) StartOperation(ctx context.Context, service, operation
 	iptr := reflect.New(inputType).Interface()
 	if err := input.Consume(iptr); err != nil {
 		// TODO: log the error? Do we need to accept a logger for this single line?
-		return nil, HandlerErrorf(HandlerErrorTypeBadRequest, "invalid input")
+		return nil, NewHandlerErrorf(HandlerErrorTypeBadRequest, "invalid input")
 	}
 	return h.Start(ctx, reflect.ValueOf(iptr).Elem().Interface(), options)
 }
@@ -362,28 +335,6 @@ func (r *rootOperationHandler) Cancel(ctx context.Context, token string, options
 	return values[0].Interface().(error)
 }
 
-func (r *rootOperationHandler) GetInfo(ctx context.Context, token string, options GetOperationInfoOptions) (*OperationInfo, error) {
-	// NOTE: We could avoid reflection here if we put the GetInfo method on RegisterableOperation but it doesn't
-	// seem worth it since we need reflection for the generic methods.
-	m, _ := reflect.TypeOf(r.h).MethodByName("GetInfo")
-	values := m.Func.Call([]reflect.Value{reflect.ValueOf(r.h), reflect.ValueOf(ctx), reflect.ValueOf(token), reflect.ValueOf(options)})
-	if !values[1].IsNil() {
-		return nil, values[1].Interface().(error)
-	}
-	ret := values[0].Interface()
-	return ret.(*OperationInfo), nil
-}
-
-func (r *rootOperationHandler) GetResult(ctx context.Context, token string, options GetOperationResultOptions) (any, error) {
-	m, _ := reflect.TypeOf(r.h).MethodByName("GetResult")
-	values := m.Func.Call([]reflect.Value{reflect.ValueOf(r.h), reflect.ValueOf(ctx), reflect.ValueOf(token), reflect.ValueOf(options)})
-	if !values[1].IsNil() {
-		return nil, values[1].Interface().(error)
-	}
-	ret := values[0].Interface()
-	return ret, nil
-}
-
 func (r *rootOperationHandler) Start(ctx context.Context, input any, options StartOperationOptions) (HandlerStartOperationResult[any], error) {
 	m, _ := reflect.TypeOf(r.h).MethodByName("Start")
 	values := m.Func.Call([]reflect.Value{reflect.ValueOf(r.h), reflect.ValueOf(ctx), reflect.ValueOf(input), reflect.ValueOf(options)})
@@ -392,63 +343,4 @@ func (r *rootOperationHandler) Start(ctx context.Context, input any, options Sta
 	}
 	ret := values[0].Interface()
 	return ret.(HandlerStartOperationResult[any]), nil
-}
-
-// ExecuteOperation is the type safe version of [HTTPClient.ExecuteOperation].
-// It accepts input of type I and returns output of type O, removing the need to consume the [LazyValue] returned by the
-// client method.
-//
-//	ref := NewOperationReference[MyInput, MyOutput]("my-operation")
-//	out, err := ExecuteOperation(ctx, client, ref, MyInput{}, options) // returns MyOutput, error
-func ExecuteOperation[I, O any](ctx context.Context, client *HTTPClient, operation OperationReference[I, O], input I, request ExecuteOperationOptions) (O, error) {
-	var o O
-	value, err := client.ExecuteOperation(ctx, operation.Name(), input, request)
-	if err != nil {
-		return o, err
-	}
-	return o, value.Consume(&o)
-}
-
-// StartOperation is the type safe version of [HTTPClient.StartOperation].
-// It accepts input of type I and returns a [ClientStartOperationResult] of type O, removing the need to consume the
-// [LazyValue] returned by the client method.
-func StartOperation[I, O any](ctx context.Context, client *HTTPClient, operation OperationReference[I, O], input I, request StartOperationOptions) (*ClientStartOperationResult[O], error) {
-	result, err := client.StartOperation(ctx, operation.Name(), input, request)
-	if err != nil {
-		return nil, err
-	}
-	if result.Successful != nil {
-		var o O
-		if err := result.Successful.Consume(&o); err != nil {
-			return nil, err
-		}
-		return &ClientStartOperationResult[O]{
-			Successful: o,
-			Links:      result.Links,
-		}, nil
-	}
-	handle := OperationHandle[O]{
-		client:    client,
-		Operation: operation.Name(),
-		ID:        result.Pending.ID,
-		Token:     result.Pending.Token,
-	}
-	return &ClientStartOperationResult[O]{
-		Pending: &handle,
-		Links:   result.Links,
-	}, nil
-}
-
-// NewHandle is the type safe version of [HTTPClient.NewHandle].
-// The [Handle.GetResult] method will return an output of type O.
-func NewHandle[I, O any](client *HTTPClient, operation OperationReference[I, O], token string) (*OperationHandle[O], error) {
-	if token == "" {
-		return nil, errEmptyOperationToken
-	}
-	return &OperationHandle[O]{
-		client:    client,
-		Operation: operation.Name(),
-		ID:        token, // Duplicate token as ID for the deprecation period.
-		Token:     token,
-	}, nil
 }

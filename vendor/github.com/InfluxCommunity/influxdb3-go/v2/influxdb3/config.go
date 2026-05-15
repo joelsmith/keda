@@ -31,6 +31,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/apache/arrow-go/v18/arrow/flight"
 	"github.com/influxdata/line-protocol/v2/lineprotocol"
 )
 
@@ -43,6 +44,8 @@ const (
 	envInfluxPrecision     = "INFLUX_PRECISION"
 	envInfluxGzipThreshold = "INFLUX_GZIP_THRESHOLD"
 	envInfluxWriteNoSync   = "INFLUX_WRITE_NO_SYNC"
+	envInfluxWriteTimeout  = "INFLUX_WRITE_TIMEOUT"
+	envInfluxQueryTimeout  = "INFLUX_QUERY_TIMEOUT"
 )
 
 const (
@@ -62,6 +65,9 @@ const (
 	defaultIdleConnectionTimeout = 90 * time.Second
 	// defaultMaxIdleConnections specifies the default value of ClientConfig.MaxIdleConnections.
 	defaultMaxIdleConnections = 100
+	// HTTP schemes
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
 )
 
 // ClientConfig holds the parameters for creating a new client.
@@ -105,7 +111,20 @@ type ClientConfig struct {
 	// It is applied to write (HTTP client) operations only.
 	//
 	// A negative value means no timeout. Default value: 10 seconds.
+	//
+	// Deprecated: Please use more specific properties WriteTimeout and QueryTimeout
 	Timeout time.Duration
+
+	// WriteTimeout specifies the overall time limit for write requests made by the Client.
+	//
+	// A negative value means no timeout.  Default value: 10 seconds.
+	WriteTimeout time.Duration
+
+	// QueryTimeout when defined specifies the amount of time used to calculate an implicit
+	// Deadline context when query streams are opened by the Client.
+	//
+	// A negative value means no Deadline will be added, in which case Queries can potentially run indefinitely.
+	QueryTimeout time.Duration
 
 	// IdleConnectionTimeout specifies the maximum amount of time an idle connection
 	// will remain idle before closing itself.
@@ -131,6 +150,9 @@ type ClientConfig struct {
 
 	// Proxy URL
 	Proxy string
+
+	// Flight client middleware
+	Middleware []flight.ClientMiddleware
 }
 
 // validate validates the config.
@@ -152,7 +174,7 @@ func (c *ClientConfig) parse(connectionString string) error {
 		return err
 	}
 
-	if !(u.Scheme == "http" || u.Scheme == "https") {
+	if !(u.Scheme == schemeHTTP || u.Scheme == schemeHTTPS) {
 		return errors.New("only http or https is supported")
 	}
 
@@ -224,6 +246,20 @@ func (c *ClientConfig) env() error {
 			return err
 		}
 	}
+	if writeTimeout, ok := os.LookupEnv(envInfluxWriteTimeout); ok {
+		to, err := time.ParseDuration(writeTimeout)
+		if err != nil {
+			return err
+		}
+		c.WriteTimeout = to
+	}
+	if queryTimeout, ok := os.LookupEnv(envInfluxQueryTimeout); ok {
+		to, err := time.ParseDuration(queryTimeout)
+		if err != nil {
+			return err
+		}
+		c.QueryTimeout = to
+	}
 
 	return nil
 }
@@ -292,15 +328,23 @@ func (c *ClientConfig) isTimeoutSet() bool {
 
 // getTimeoutOrDefault returns the Timeout or the default value if not set.
 func (c *ClientConfig) getTimeoutOrDefault() time.Duration {
-	if c.Timeout == 0 {
-		// Not set, use the default.
-		return defaultTimeout
+	// Not set, try deprecated c.Timeout
+	if c.WriteTimeout == 0 {
+		if c.Timeout == 0 {
+			// Not set, use the default.
+			return defaultTimeout
+		}
+		if c.Timeout < 0 {
+			// No timeout.
+			return 0
+		}
+		return c.Timeout
 	}
-	if c.Timeout < 0 {
+	if c.WriteTimeout < 0 {
 		// No timeout.
 		return 0
 	}
-	return c.Timeout
+	return c.WriteTimeout
 }
 
 // isIdleConnectionTimeoutSet returns whether the IdleConnectionTimeout was set.
